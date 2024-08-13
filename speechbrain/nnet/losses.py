@@ -976,7 +976,172 @@ def reduce_loss(
 
         return -label_smoothing * loss_reg + (1 - label_smoothing) * loss
 
+# def get_perceptual_with_si_snr_pit(source, estimate_source, rate, dnsmos_obj):
+#     """This function wraps si_snr calculation with the speechbrain pit-wrapper.
 
+#     Arguments
+#     ---------
+#     source: torch.Tensor
+#         Shape is [B, T, C],
+#         Where B is the batch size, T is the length of the sources, C is
+#         the number of sources the ordering is made so that this loss is
+#         compatible with the class PitWrapper.
+#     estimate_source: torch.Tensor
+#         The estimated source, of shape [B, T, C]
+
+#     Returns
+#     -------
+#     loss: torch.Tensor
+#         The computed SNR
+
+#     Example
+#     -------
+#     >>> x = torch.arange(600).reshape(3, 100, 2)
+#     >>> xhat = x[:, :, (1, 0)]
+#     >>> si_snr = -get_si_snr_with_pitwrapper(x, xhat)
+#     >>> print(si_snr)
+#     tensor([135.2284, 135.2284, 135.2284])
+#     """
+
+#     pit_si_snr = PitWrapper(cal_si_snr)
+#     si_snr_loss, perms = pit_si_snr(source, estimate_source)
+#     from pesq import pesq
+#     from pystoi import stoi
+    
+#     pesq_loss = 0
+#     stoi_loss = 0
+#     ovrl_loss = 0
+#     sig_loss = 0
+#     bak_loss = 0
+#     p808_loss = 0
+#     count = 0
+#     for p in perms:
+#         count += len(p)
+#         for i, pos in enumerate(p):
+#             pesq_loss += pesq(rate, 
+#                         source[...,i].squeeze().t().detach().cpu().numpy(), 
+#                         estimate_source[...,pos].squeeze().t().detach().cpu().numpy(), 
+#                         'nb')
+
+#             stoi_loss += stoi(
+#                 source[...,i].squeeze().t().detach().cpu().numpy(), 
+#                 estimate_source[...,pos].squeeze().t().detach().cpu().numpy(),
+#                 rate
+#             )
+            
+#             # logging.getLogger().setLevel(logging.WARNING)
+#             if dnsmos_obj is not None:
+#                 dns_loss = dnsmos_obj.run(
+#                     estimate_source[...,pos].squeeze().t().detach().cpu().numpy(),
+#                     16000
+#                 )
+#                 ovrl_loss += dns_loss['ovrl_mos']
+#                 sig_loss += dns_loss['sig_mos']
+#                 bak_loss += dns_loss['bak_mos']
+#                 p808_loss += dns_loss['p808_mos']
+                
+
+#             # logging.getLogger().setLevel(logging.DEBUG)
+
+#     pesq_loss = pesq_loss/count
+#     stoi_loss = stoi_loss/count
+#     ovrl_loss = ovrl_loss/count
+#     sig_loss = sig_loss/count
+#     bak_loss = bak_loss/count
+#     p808_loss = p808_loss/count
+
+#         # print(pesq_loss,stoi_loss, dns_loss)
+#         # raise Exception
+#     return si_snr_loss, pesq_loss, stoi_loss, ovrl_loss, sig_loss, bak_loss, p808_loss
+
+def get_perceptual_with_si_snr_pit(source, estimate_source, rate, dnsmos_obj):
+    """This function wraps si_snr calculation with the speechbrain pit-wrapper.
+
+    Arguments
+    ---------
+    source: torch.Tensor
+        Shape is [B, T, C],
+        Where B is the batch size, T is the length of the sources, C is
+        the number of sources the ordering is made so that this loss is
+        compatible with the class PitWrapper.
+    estimate_source: torch.Tensor
+        The estimated source, of shape [B, T, C]
+
+    Returns
+    -------
+    loss: torch.Tensor
+        The computed SNR
+
+    Example
+    -------
+    >>> x = torch.arange(600).reshape(3, 100, 2)
+    >>> xhat = x[:, :, (1, 0)]
+    >>> si_snr = -get_si_snr_with_pitwrapper(x, xhat)
+    >>> print(si_snr)
+    tensor([135.2284, 135.2284, 135.2284])
+    """
+
+    pit_si_snr = PitWrapper(cal_si_snr)
+    si_snr_loss, perms = pit_si_snr(source, estimate_source)
+    from pesq import pesq
+    from pystoi import stoi
+    
+    assert len(perms) == 1
+    for p in perms:
+        pesq_loss = 0
+        stoi_loss = 0
+        ovrl_loss = 0
+        sig_loss = 0
+        bak_loss = 0
+        p808_loss = 0
+        for i, pos in enumerate(p):
+            pesq_loss += pesq(rate, 
+                        source[...,i].squeeze().t().detach().cpu().numpy(), 
+                        estimate_source[...,pos].squeeze().t().detach().cpu().numpy(), 
+                        'nb')
+
+            stoi_loss += stoi(
+                source[...,i].squeeze().t().detach().cpu().numpy(), 
+                estimate_source[...,pos].squeeze().t().detach().cpu().numpy(),
+                rate
+            )
+            
+            # logging.getLogger().setLevel(logging.WARNING)
+            if dnsmos_obj is not None:
+                dns_loss = dnsmos_obj.run(
+                    estimate_source[...,pos].squeeze().t().detach().cpu().numpy(),
+                    16000
+                )
+                ovrl_loss += dns_loss['ovrl_mos']
+                sig_loss += dns_loss['sig_mos']
+                bak_loss += dns_loss['bak_mos']
+                p808_loss += dns_loss['p808_mos']
+                
+
+            # logging.getLogger().setLevel(logging.DEBUG)
+
+        pesq_loss = pesq_loss/len(p)
+        stoi_loss = stoi_loss/len(p)
+        # dns_loss = dns_loss/len(p)
+        ovrl_loss = ovrl_loss/len(p)
+        sig_loss = sig_loss/len(p)
+        bak_loss = bak_loss/len(p)
+        p808_loss = p808_loss/len(p)
+
+        # print(pesq_loss,stoi_loss, dns_loss)
+        # raise Exception
+    return si_snr_loss, pesq_loss, stoi_loss, ovrl_loss, sig_loss, bak_loss, p808_loss
+
+def get_L1_with_pitwrapper(source, estimate_source, getPerms=False):
+    
+    pit_si_snr = PitWrapper(nn.MSELoss(reduction="none"))
+    loss, perms = pit_si_snr(source, estimate_source)
+
+    if getPerms:
+        return loss, perms
+    else:
+        return loss
+    
 def get_si_snr_with_pitwrapper(source, estimate_source):
     """This function wraps si_snr calculation with the speechbrain pit-wrapper.
 

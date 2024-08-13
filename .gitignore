@@ -157,3 +157,16 @@ dmypy.json
 
 # Mac OS
 .DS_Store
+
+#unecessary working folders
+*/inference/*
+*/lobes/models/SPGM_rmGlob.py
+*/lobes/models/put_this_in_speechbrain_lobes_models.zip
+*/lobes/models/trip_path.py
+*/lobes/models/trip_path_v2.py
+recipes/WSJ0Mix/separation/hparams/sb1_trip_path_v1-e1.yaml
+recipes/WSJ0Mix/separation/hparams/sb1_trip_path_v2-e1.yaml
+recipes/WSJ0Mix/separation/hparams/trip_path_v1-e1.yaml
+recipes/WSJ0Mix/separation/hparams/trip_path_v2-e1.yaml
+recipes/WSJ0Mix/separation/hparams/cdf_trf_L4nq.yaml
+recipes/WSJ0Mix/separation/hparams/fromnscc.yaml
