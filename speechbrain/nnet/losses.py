@@ -24,6 +24,12 @@ from speechbrain.dataio.dataio import length_to_mask
 from speechbrain.decoders.ctc import filter_ctc_output
 from speechbrain.utils.data_utils import unsqueeze_as
 
+#Imports for the perceptual_pit loss function
+import torchaudio
+import torchaudio.transforms as T
+from pesq import pesq
+from pystoi import stoi
+
 logger = logging.getLogger(__name__)
 
 
@@ -1083,8 +1089,6 @@ def get_perceptual_with_si_snr_pit(source, estimate_source, rate, dnsmos_obj):
 
     pit_si_snr = PitWrapper(cal_si_snr)
     si_snr_loss, perms = pit_si_snr(source, estimate_source)
-    from pesq import pesq
-    from pystoi import stoi
     
     assert len(perms) == 1
     for p in perms:
@@ -1106,10 +1110,22 @@ def get_perceptual_with_si_snr_pit(source, estimate_source, rate, dnsmos_obj):
                 rate
             )
             
-            # logging.getLogger().setLevel(logging.WARNING)
+            if rate != 16000:
+                dns_est = torchaudio.functional.resample(
+                    estimate_source[...,pos].squeeze(),
+                    orig_freq = rate,
+                    new_freq = 16000
+                    )
+                dns_est = dns_est / torch.max(dns_est.abs())
+                
+            else:
+                dns_est = estimate_source[...,pos].squeeze()
+
+            logging.getLogger().setLevel(logging.WARNING)
+
             if dnsmos_obj is not None:
                 dns_loss = dnsmos_obj.run(
-                    estimate_source[...,pos].squeeze().t().detach().cpu().numpy(),
+                    dns_est.t().detach().cpu().numpy(),
                     16000
                 )
                 ovrl_loss += dns_loss['ovrl_mos']
@@ -1118,18 +1134,16 @@ def get_perceptual_with_si_snr_pit(source, estimate_source, rate, dnsmos_obj):
                 p808_loss += dns_loss['p808_mos']
                 
 
-            # logging.getLogger().setLevel(logging.DEBUG)
+            logging.getLogger().setLevel(logging.DEBUG)
 
         pesq_loss = pesq_loss/len(p)
         stoi_loss = stoi_loss/len(p)
-        # dns_loss = dns_loss/len(p)
+
         ovrl_loss = ovrl_loss/len(p)
         sig_loss = sig_loss/len(p)
         bak_loss = bak_loss/len(p)
         p808_loss = p808_loss/len(p)
 
-        # print(pesq_loss,stoi_loss, dns_loss)
-        # raise Exception
     return si_snr_loss, pesq_loss, stoi_loss, ovrl_loss, sig_loss, bak_loss, p808_loss
 
 def get_L1_with_pitwrapper(source, estimate_source, getPerms=False):
