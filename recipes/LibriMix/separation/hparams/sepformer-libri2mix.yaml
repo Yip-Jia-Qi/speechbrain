@@ -14,7 +14,7 @@ __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
 # e.g. '/yourpath/Libri2Mix/train-clean-360/'
 # the data folder is needed even if dynamic mixing is applied
-data_folder: !PLACEHOLDER
+data_folder: /scratch/jiaqi006/others/LibriMix/Libri2Mix
 
 # this is the base folder for dynamic mixing
 base_folder_dm: /yourpath/LibriSpeech/train-clean-360/
@@ -35,7 +35,7 @@ precision: fp16 # bf16, fp16 or fp32 # Set it to True for mixed precision
 num_spks: 2
 noprogressbar: False
 save_audio: False # Save estimated sources on disk
-sample_rate: 8000
+sample_rate: 16000
 
 ####################### Training Parameters ####################################
 N_epochs: 200

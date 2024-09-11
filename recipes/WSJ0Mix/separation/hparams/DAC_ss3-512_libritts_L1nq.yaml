@@ -162,7 +162,6 @@ loss: !name:speechbrain.nnet.losses.get_si_snr_with_pitwrapper
 L1_loss: !name:speechbrain.nnet.losses.get_L1_with_pitwrapper
 
 lr_scheduler: !new:speechbrain.nnet.schedulers.ReduceLROnPlateau
-
   factor: 0.5
   patience: 2
   dont_halve_until_epoch: 5

@@ -10,7 +10,7 @@
 # Basic parameters
 # Seed needs to be set at top of yaml, before objects with parameters are made
 #
-seed: 8
+seed: 9
 __set_seed: !apply:torch.manual_seed [1234]
 
 # Data params
@@ -48,7 +48,7 @@ quantize_before: false
 quantize_after: false
 
 # Training parameters
-N_epochs: 20
+N_epochs: 100
 batch_size: 5 #3
 lr: 0.00015 #0.003
 clip_grad_norm: 5
@@ -204,4 +204,4 @@ pretrained_separator: !new:speechbrain.utils.parameter_transfer.Pretrainer
   loadables:
       sepmodel: !ref <sepmodel> 
   paths:
-      sepmodel: /home/jiaqi006/code/speechbrain_v1_0_0/speechbrain/recipes/WSJ0Mix/separation/results/codecformer4/DAC_ss3-512_libriTTS_L1nq/1234/save/sepmodel_temp_pt.ckpt
+      sepmodel: /home/jiaqi006/code/speechbrain_v1_0_0/speechbrain/recipes/WSJ0Mix/separation/results/codecformer4/DAC_ss3-512_libriTTS_L1nq/1234/save/sepmodel_ep100.ckpt

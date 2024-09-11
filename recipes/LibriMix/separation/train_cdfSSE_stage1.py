@@ -1,16 +1,16 @@
 #!/usr/bin/env/python3
-"""Recipe for training a neural speech separation system on wsjmix the
-dataset. The system employs an encoder, a decoder, and a masking network.
+"""Recipe for training a neural speech separation system on Libri2/3Mix datasets.
+The system employs an encoder, a decoder, and a masking network.
 
 To run this recipe, do the following:
-> python train.py hparams/sepformer.yaml
-> python train.py hparams/dualpath_rnn.yaml
-> python train.py hparams/convtasnet.yaml
+> python train.py hparams/sepformer-libri2mix.yaml
+> python train.py hparams/sepformer-libri3mix.yaml
+
 
 The experiment file is flexible enough to support different neural
 networks. By properly changing the parameter files, you can try
-different architectures. The script supports both wsj2mix and
-wsj3mix.
+different architectures. The script supports both libri2mix and
+libri3mix.
 
 
 Authors
@@ -50,26 +50,10 @@ from speechbrain.nnet.losses import PitWrapper, get_perceptual_with_si_snr_pit
 
 # Define training procedure
 class Separation(sb.Brain):
-    def compute_forward(self, mix, targets, stage, noise=None, use_cfm=False):
+    def compute_forward(self, mix, targets, stage, noise=None):
         """Forward computations from the mixture to the separated signals."""
         other = {}
-                    
-        def normalize_and_save_info(tensor):
-            # Assuming tensor shape is [Speakers, Batch, Time, Channels]
-            assert len(tensor.shape)==4
-            std, mean = torch.std_mean(tensor, dim=2, keepdim=True)
-            
-            # Normalize
-            normalized_tensor = (tensor - mean) / (std + 1e-5)  # Adding epsilon for numerical stability
-            
-            return normalized_tensor, mean, std
 
-        def denormalize(normalized_tensor, mean, std):
-            # Undo the normalization
-            original_tensor = normalized_tensor * (std + 1e-5) + mean
-            return original_tensor
-                    
-                    
         # Unpack lists and put tensors in the right device
         mix, mix_lens = mix
         mix, mix_lens = mix.to(self.device), mix_lens.to(self.device)
@@ -78,7 +62,6 @@ class Separation(sb.Brain):
         self.hparams.dacmodel.model.to(self.device)
         self.hparams.dacmodel.dac_sampler.to(self.device)
         self.hparams.dacmodel.org_sampler.to(self.device)
-        self.hparams.sepmodel.to(self.device)
 
         # Convert targets to tensor
         targets = torch.cat(
@@ -89,10 +72,22 @@ class Separation(sb.Brain):
         # Add speech distortions
         if stage == sb.Stage.TRAIN:
             with torch.no_grad():
-                if self.hparams.use_speedperturb:
+                if self.hparams.use_speedperturb or self.hparams.use_rand_shift:
                     mix, targets = self.add_speed_perturb(targets, mix_lens)
 
                     mix = targets.sum(-1)
+
+                    if self.hparams.use_wham_noise:
+                        noise = noise.to(self.device)
+                        len_noise = noise.shape[1]
+                        len_mix = mix.shape[1]
+                        min_len = min(len_noise, len_mix)
+
+                        # add the noise
+                        mix = mix[:, :min_len] + noise[:, :min_len]
+
+                        # fix the length of targets also
+                        targets = targets[:, :min_len, :]
 
                 if self.hparams.use_wavedrop:
                     mix = self.hparams.drop_chunk(mix, mix_lens)
@@ -115,17 +110,17 @@ class Separation(sb.Brain):
         targs = [self.hparams.dacmodel.get_encoded_features(targ[i]) for i in range(self.hparams.num_spks)]
         targ_w = torch.cat([item[0].unsqueeze(0) for item in targs],dim=0)
         other['targ_w'] = targ_w
-        # other['targ_w_norm'], targ_w_mean, targ_w_std = normalize_and_save_info(targ_w)
         targ_lengths = torch.tensor([item[1] for item in targs])
-        #quantization step
-        targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
-        targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]   
-        other['targ_q'] = targ_q
-        # other['targ_q_norm'], targ_q_mean, targ_q_std = normalize_and_save_info(targ_q)
-        targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
-        other['targ_q_codes'] = targ_q_codes
-
+        
         if stage != sb.Stage.TRAIN:
+            #quantization step
+            targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
+            targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]
+            other['targ_q'] = targ_q
+            targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
+            other['targ_q_codes'] = targ_q_codes
+        
+            
             #decoding step
             targets_transmitted = torch.cat(
                 [
@@ -151,33 +146,14 @@ class Separation(sb.Brain):
             mix_w = self.hparams.dacmodel.get_quantized_features(mix_w)[0]
 
         # Separate the embeddings
-        with torch.no_grad():
-            est_mask = self.hparams.sepmodel(mix_w)
-            mix_w = torch.stack([mix_w] * self.hparams.num_spks)
-            mix_s = mix_w * est_mask
-            other['mix_s'] = mix_s
-            # other['mix_s_norm'], mix_s_mean, mix_s_std = normalize_and_save_info(mix_s)
+        est_mask = self.hparams.sepmodel(mix_w)
+        mix_w = torch.stack([mix_w] * self.hparams.num_spks)
+        mix_s = mix_w * est_mask
+        other['mix_s'] = mix_s
         #For L1 training, mix_s is the output used
 
         #Pipeline for validation and testing is the same. Decoding to waveforms is done only when not training. 
-        # if stage != sb.Stage.TRAIN:                
-
-        #Decoding and CFM inference done only during testing
-        if stage == sb.Stage.TEST:
-            
-            #Apply cfm if necessary
-            if use_cfm:
-                
-                mix_s = torch.cat(
-                    [
-                        self.hparams.vbCFM.sample(cond  = other["mix_s"][i].permute(0,2,1), steps = 100).permute(0,2,1).unsqueeze(0)
-                        for i in range(self.hparams.num_spks)
-                    ],
-                    dim=0,
-                )
-                # mix_s = denormalize(mix_s, mix_s_mean, mix_s_std)
-                other["mix_s_cfm"] = mix_s
-
+        if stage != sb.Stage.TRAIN:
             #Apply quantization if necessary
             if self.hparams.quantize_after:
                 mix_qs = [self.hparams.dacmodel.get_quantized_features(mix_s[i]) for i in range(self.hparams.num_spks)]
@@ -189,7 +165,7 @@ class Separation(sb.Brain):
             else:
                 mix_sq = mix_s
             
-            #Decode embeddings
+            
             est_source = torch.cat(
                 [
                     self.hparams.dacmodel.get_decoded_signal(mix_sq[i],mix_length).unsqueeze(0)
@@ -208,38 +184,11 @@ class Separation(sb.Brain):
 
     def compute_objectives(self, predictions, targets, other, stage):
         """Computes the sinr loss""" 
-        # if stage == sb.Stage.TRAIN:
-        if stage != sb.Stage.TEST:            
+        if stage == sb.Stage.TRAIN:
+        
+            emb_loss = self.hparams.L1_loss(other["mix_s"].permute(1,2,3,0),other["targ_w"].permute(1,2,3,0))
             
-            _, perms = self.hparams.L1_loss(other["mix_s"].permute(1,2,3,0),other["targ_w"].permute(1,2,3,0), getPerms = True)
-
-            mix_s_permuted = []
-            for i, pos in enumerate(perms):
-                entry = []
-                for p in pos:
-                    entry.append(other["mix_s"][p,i,:,:].unsqueeze(0))
-                mix_s_permuted.append(torch.cat(entry, dim=0).unsqueeze(1))
-
-            mix_s_permuted = torch.cat(mix_s_permuted, dim=1)
-
-            # Run this code to check that the permutations are correct
-            # _, permed_perms = self.hparams.L1_loss(mix_s_permuted.permute(1,2,3,0),other["targ_w"].permute(1,2,3,0), getPerms = True)
-            # print(permed_perms)
-            # Expected: [(0, 1), (0, 1), (0, 1), (0, 1), (0, 1)]
-            # only (0,1) perms are expected if all the permutations have been correctly assigned.
-
-            cfm_loss = 0
-            # import pdb
-            # pdb.set_trace()
-            for i in range(self.hparams.num_spks):
-                cfm_loss += self.hparams.vbCFM(other["targ_w"][i].permute(0,2,1), cond = mix_s_permuted[i].permute(0,2,1))
-
-            cfm_loss = cfm_loss/self.hparams.num_spks
-
-            # import pdb
-            # pdb.set_trace()
-            
-            loss = cfm_loss
+            loss = emb_loss
 
         elif stage == sb.Stage.TEST:
             loss = self.hparams.loss(targets, predictions)
@@ -255,6 +204,10 @@ class Separation(sb.Brain):
         # Unpacking batch list
         mixture = batch.mix_sig
         targets = [batch.s1_sig, batch.s2_sig]
+        if self.hparams.use_wham_noise:
+            noise = batch.noise_sig[0]
+        else:
+            noise = None
 
         if self.hparams.num_spks == 3:
             targets.append(batch.s3_sig)
@@ -262,7 +215,8 @@ class Separation(sb.Brain):
         with self.no_sync(not should_step):
             if self.use_amp:
                 with torch.autocast(
-                    dtype=amp.dtype, device_type=torch.device(self.device).type
+                    dtype=amp.dtype,
+                    device_type=torch.device(self.device).type,
                 ):
                     predictions, targets, targets_transmitted, other = self.compute_forward(
                         mixture, targets, sb.Stage.TRAIN
@@ -336,7 +290,6 @@ class Separation(sb.Brain):
 
     def evaluate_batch(self, batch, stage):
         """Computations needed for validation/test batches"""
-        use_cfm = self.use_cfm
         snt_id = batch.id
         mixture = batch.mix_sig
         targets = [batch.s1_sig, batch.s2_sig]
@@ -344,17 +297,17 @@ class Separation(sb.Brain):
             targets.append(batch.s3_sig)
 
         with torch.no_grad():
-            predictions, targets, targets_transmitted, other  = self.compute_forward(mixture, targets, stage, use_cfm=use_cfm)
+            predictions, targets, targets_transmitted, other  = self.compute_forward(mixture, targets, stage)
             loss = self.compute_objectives(predictions, targets_transmitted, other, stage) #Sending targets transmitted here for cSISDR monitoring
 
         # Manage audio file saving
         if stage == sb.Stage.TEST and self.hparams.save_audio:
             if hasattr(self.hparams, "n_audio_to_save"):
                 if self.hparams.n_audio_to_save > 0:
-                    self.save_audio(snt_id[0], mixture, targets, predictions, targets_transmitted, use_cfm=use_cfm)
+                    self.save_audio(snt_id[0], mixture, targets, predictions)
                     self.hparams.n_audio_to_save += -1
             else:
-                self.save_audio(snt_id[0], mixture, targets, predictions, targets_transmitted, use_cfm=use_cfm)
+                self.save_audio(snt_id[0], mixture, targets, predictions)
 
         return loss.mean().detach()
 
@@ -385,7 +338,8 @@ class Separation(sb.Brain):
                 valid_stats=stage_stats,
             )
             self.checkpointer.save_and_keep_only(
-                meta={"si-snr": stage_stats["si-snr"]}, min_keys=["si-snr"]
+                meta={"si-snr": stage_stats["si-snr"]},
+                min_keys=["si-snr"],
             )
         elif stage == sb.Stage.TEST:
             self.hparams.train_logger.log_stats(
@@ -399,7 +353,7 @@ class Separation(sb.Brain):
         min_len = -1
         recombine = False
 
-        if self.hparams.use_speedperturb or self.hparams.use_rand_shift:
+        if self.hparams.use_speedperturb:
             # Performing speed change (independently on each source)
             new_targets = []
             recombine = True
@@ -465,7 +419,7 @@ class Separation(sb.Brain):
             if layer != child_layer:
                 self.reset_layer_recursively(child_layer)
 
-    def save_results(self, test_data, use_cfm=False):
+    def save_results(self, test_data):
         """This script computes the SDR and SI-SNR metrics and saves
         them into a csv file"""
 
@@ -473,7 +427,7 @@ class Separation(sb.Brain):
         from mir_eval.separation import bss_eval_sources
 
         # Create folders where to store audio
-        save_file = os.path.join(self.hparams.output_folder, f'ep{self.hparams.epoch_counter.current}_test_results{"_cfm" if use_cfm else ""}.csv')
+        save_file = os.path.join(self.hparams.output_folder, f'ep{self.hparams.epoch_counter.current}_test_results.csv')
 
         # Variable init
         all_sdrs = []
@@ -516,7 +470,7 @@ class Separation(sb.Brain):
 
                     with torch.no_grad():
                         predictions, targets, targets_transmitted, other  = self.compute_forward(
-                            batch.mix_sig, targets, sb.Stage.TEST, use_cfm = use_cfm
+                            batch.mix_sig, targets, sb.Stage.TEST
                         )
 
                     # Compute SI-SNR
@@ -619,7 +573,7 @@ class Separation(sb.Brain):
                     "p808": np.array(all_p808).mean(),
                 }
                 writer.writerow(row)
-        logger.info(f'----Use cfm={use_cfm}----')
+
         logger.info("Mean True-SISNR is {}".format(np.array(all_sisnrs).mean()))
         logger.info("Mean True-SISNRi is {}".format(np.array(all_sisnrs_i).mean()))
         logger.info("Mean True-SDR is {}".format(np.array(all_sdrs).mean()))
@@ -637,11 +591,11 @@ class Separation(sb.Brain):
         logger.info("Mean bak is {}".format(np.array(all_bak).mean()))
         logger.info("Mean p808 is {}".format(np.array(all_p808).mean()))
 
-    def save_audio(self, snt_id, mixture, targets, predictions, targets_transmitted, use_cfm=False):
+    def save_audio(self, snt_id, mixture, targets, predictions):
         "saves the test audio (mixture, targets, and estimated sources) on disk"
 
         # Create output folder
-        save_path = os.path.join(self.hparams.save_folder, f'ep{self.hparams.epoch_counter.current}_audio_results{"_cfm" if use_cfm else ""}')
+        save_path = os.path.join(self.hparams.save_folder, f'ep{self.hparams.epoch_counter.current}_audio_results')
         if not os.path.exists(save_path):
             os.mkdir(save_path)
 
@@ -651,16 +605,6 @@ class Separation(sb.Brain):
             signal = signal / signal.abs().max()
             save_file = os.path.join(
                 save_path, "item{}_source{}hat.wav".format(snt_id, ns + 1)
-            )
-            torchaudio.save(
-                save_file, signal.unsqueeze(0).cpu(), self.hparams.sample_rate
-            )
-
-            # Estimated source
-            signal = targets_transmitted[0, :, ns]
-            signal = signal / signal.abs().max()
-            save_file = os.path.join(
-                save_path, "item{}_source{}trans.wav".format(snt_id, ns + 1)
             )
             torchaudio.save(
                 save_file, signal.unsqueeze(0).cpu(), self.hparams.sample_rate
@@ -684,7 +628,7 @@ class Separation(sb.Brain):
             save_file, signal.unsqueeze(0).cpu(), self.hparams.sample_rate
         )
 
-    def plot_metric_histograms(self, epoch, use_cfm):
+    def plot_metric_histograms(self, epoch):
         """
         Plots histograms for each metric stored in the CSV files and saves them.
         
@@ -692,11 +636,11 @@ class Separation(sb.Brain):
         - epoch (int): The current epoch number
         """
         # Create the directory for saving plots
-        save_path = os.path.join(self.hparams.save_folder, f'ep{epoch}_images{"_cfm" if use_cfm else ""}')
+        save_path = os.path.join(self.hparams.save_folder, f'ep{epoch}_images')
         os.makedirs(save_path, exist_ok=True)
         
         # Read the CSV file
-        csv_file = os.path.join(self.hparams.output_folder, f'ep{epoch}_test_results{"_cfm" if use_cfm else ""}.csv')
+        csv_file = os.path.join(self.hparams.output_folder, f'ep{epoch}_test_results.csv')
         df = pd.read_csv(csv_file)
         
         # Remove the 'avg' row if it exists
@@ -773,17 +717,40 @@ def dataio_prep(hparams):
             s3_sig = sb.dataio.dataio.read_audio(s3_wav)
             return s3_sig
 
+    if hparams["use_wham_noise"]:
+
+        @sb.utils.data_pipeline.takes("noise_wav")
+        @sb.utils.data_pipeline.provides("noise_sig")
+        def audio_pipeline_noise(noise_wav):
+            noise_sig = sb.dataio.dataio.read_audio(noise_wav)
+            return noise_sig
+
     sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_mix)
     sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s1)
     sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s2)
     if hparams["num_spks"] == 3:
         sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s3)
+
+    if hparams["use_wham_noise"]:
+        print("Using the WHAM! noise in the data pipeline")
+        sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_noise)
+
+    if (hparams["num_spks"] == 2) and hparams["use_wham_noise"]:
         sb.dataio.dataset.set_output_keys(
-            datasets, ["id", "mix_sig", "s1_sig", "s2_sig", "s3_sig"]
+            datasets, ["id", "mix_sig", "s1_sig", "s2_sig", "noise_sig"]
+        )
+    elif (hparams["num_spks"] == 3) and hparams["use_wham_noise"]:
+        sb.dataio.dataset.set_output_keys(
+            datasets,
+            ["id", "mix_sig", "s1_sig", "s2_sig", "s3_sig", "noise_sig"],
+        )
+    elif (hparams["num_spks"] == 2) and not hparams["use_wham_noise"]:
+        sb.dataio.dataset.set_output_keys(
+            datasets, ["id", "mix_sig", "s1_sig", "s2_sig"]
         )
     else:
         sb.dataio.dataset.set_output_keys(
-            datasets, ["id", "mix_sig", "s1_sig", "s2_sig"]
+            datasets, ["id", "mix_sig", "s1_sig", "s2_sig", "s3_sig"]
         )
 
     return train_data, valid_data, test_data
@@ -808,10 +775,6 @@ if __name__ == "__main__":
         overrides=overrides,
     )
 
-    # Update precision to bf16 if the device is CPU and precision is fp16
-    if run_opts.get("device") == "cpu" and hparams.get("precision") == "fp16":
-        hparams["precision"] = "bf16"
-
     # Check if wsj0_tr is set with dynamic mixing
     if hparams["dynamic_mixing"] and not os.path.exists(
         hparams["base_folder_dm"]
@@ -820,23 +783,30 @@ if __name__ == "__main__":
             "Please, specify a valid base_folder_dm folder when using dynamic mixing"
         )
 
+    # Update precision to bf16 if the device is CPU and precision is fp16
+    if run_opts.get("device") == "cpu" and hparams.get("precision") == "fp16":
+        hparams["precision"] = "bf16"
+
     # Data preparation
-    from prepare_data import prepare_wsjmix  # noqa
+    from prepare_data import prepare_librimix
 
     run_on_main(
-        prepare_wsjmix,
+        prepare_librimix,
         kwargs={
             "datapath": hparams["data_folder"],
             "savepath": hparams["save_folder"],
             "n_spks": hparams["num_spks"],
             "skip_prep": hparams["skip_prep"],
+            "librimix_addnoise": hparams["use_wham_noise"],
             "fs": hparams["sample_rate"],
         },
     )
 
     # Create dataset objects
     if hparams["dynamic_mixing"]:
-        from dynamic_mixing import dynamic_mix_data_prep
+        from dynamic_mixing import (
+            dynamic_mix_data_prep_librimix as dynamic_mix_data_prep,
+        )
 
         # if the base_folder for dm is not processed, preprocess them
         if "processed" not in hparams["base_folder_dm"]:
@@ -844,7 +814,9 @@ if __name__ == "__main__":
             if not os.path.exists(
                 os.path.normpath(hparams["base_folder_dm"]) + "_processed"
             ):
-                from preprocess_dynamic_mixing import resample_folder
+                from recipes.LibriMix.meta.preprocess_dynamic_mixing import (
+                    resample_folder,
+                )
 
                 print("Resampling the base folder")
                 run_on_main(
@@ -856,7 +828,7 @@ if __name__ == "__main__":
                         )
                         + "_processed",
                         "fs": hparams["sample_rate"],
-                        "regex": "**/*.wav",
+                        "regex": "**/*.flac",
                     },
                 )
                 # adjust the base_folder_dm path
@@ -871,7 +843,6 @@ if __name__ == "__main__":
                     os.path.normpath(hparams["base_folder_dm"]) + "_processed"
                 )
 
-        # Collecting the hparams for dynamic batching
         dm_hparams = {
             "train_data": hparams["train_data"],
             "data_folder": hparams["data_folder"],
@@ -881,6 +852,7 @@ if __name__ == "__main__":
             "training_signal_len": hparams["training_signal_len"],
             "dataloader_opts": hparams["dataloader_opts"],
         }
+
         train_data = dynamic_mix_data_prep(dm_hparams)
         _, valid_data, test_data = dataio_prep(hparams)
     else:
@@ -900,8 +872,6 @@ if __name__ == "__main__":
         checkpointer=hparams["checkpointer"],
     )
 
-    separator.use_cfm = True
-    
     # re-initialize the parameters if we don't use a pretrained model
     if "pretrained_separator" not in hparams:
         for module in separator.modules.values():
@@ -915,20 +885,8 @@ if __name__ == "__main__":
         train_loader_kwargs=hparams["dataloader_opts"],
         valid_loader_kwargs=hparams["dataloader_opts"],
     )
-    
 
     # Eval
-    
-    temp_n_audio_to_save = separator.hparams.n_audio_to_save
-    separator.evaluate(test_data, min_key="si-snr")    
-    separator.hparams.n_audio_to_save = temp_n_audio_to_save
-    separator.use_cfm = False
     separator.evaluate(test_data, min_key="si-snr")
-    
-    separator.use_cfm = None
-    
-    separator.save_results(test_data, use_cfm=False)
-    separator.plot_metric_histograms(separator.hparams.epoch_counter.current, use_cfm=False)
-
-    separator.save_results(test_data, use_cfm=True)
-    separator.plot_metric_histograms(separator.hparams.epoch_counter.current, use_cfm=True)
+    separator.save_results(test_data)
+    separator.plot_metric_histograms(separator.hparams.epoch_counter.current)

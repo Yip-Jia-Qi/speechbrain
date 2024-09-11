@@ -136,7 +136,10 @@ class Separation(sb.Brain):
         # Separate the embeddings
         est_mask = self.hparams.sepmodel(mix_w)
         mix_w = torch.stack([mix_w] * self.hparams.num_spks)
-        mix_s = mix_w * est_mask
+        if hasattr(self.hparams, "mapping") and self.hparams.mapping:
+            mix_s = mix_w * est_mask
+        else:
+            mix_s = est_mask
         other['mix_s'] = mix_s
         #For L1 training, mix_s is the output used
 

@@ -45,7 +45,7 @@ n_audio_to_save: 20
 sample_rate: 8000
 codec_sample_rate: 16000
 quantize_before: false
-quantize_after: True
+quantize_after: false
 
 # Training parameters
 N_epochs: 100

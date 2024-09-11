@@ -101,7 +101,7 @@ class DACWrapper():
     '''
     Wrapper model for Descript Audio Codec
     '''
-    def __init__(self, input_sample_rate=8000, DAC_model_path = None, DAC_sample_rate = 16000, Freeze=True):
+    def __init__(self, input_sample_rate=8000, DAC_model_path = None, DAC_sample_rate = 16000, Freeze=True, epoch=120):
         '''
         input_sample_rate: defaults to 8000 as it common in speech separation
         Model Path: Please provde the model path to the DAC model, otherwise the 16KHz model will be automatically downloaded.
@@ -128,7 +128,7 @@ class DACWrapper():
 
             
 
-            model_path = f'{DAC_model_path}/120epoch.pth'
+            model_path = f'{DAC_model_path}/{epoch}epoch.pth'
             # print(model_path)
             load_pretrained_model(
                     init_param = f'{model_path}:codec',

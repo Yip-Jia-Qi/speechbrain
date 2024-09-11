@@ -229,8 +229,8 @@ class Separation(sb.Brain):
             # only (0,1) perms are expected if all the permutations have been correctly assigned.
 
             cfm_loss = 0
-            # import pdb
-            # pdb.set_trace()
+            import pdb
+            pdb.set_trace()
             for i in range(self.hparams.num_spks):
                 cfm_loss += self.hparams.vbCFM(other["targ_w"][i].permute(0,2,1), cond = mix_s_permuted[i].permute(0,2,1))
 

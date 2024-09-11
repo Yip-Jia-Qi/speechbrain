@@ -10,7 +10,7 @@
 # Basic parameters
 # Seed needs to be set at top of yaml, before objects with parameters are made
 #
-seed: 3
+seed: 1
 __set_seed: !apply:torch.manual_seed [1234]
 
 # Data params
@@ -25,7 +25,7 @@ data_folder: /scratch/jiaqi006/others/wsj0-2mix/2speakers
 # you can do this conversion with the script ../meta/preprocess_dynamic_mixing.py
 base_folder_dm: /yourpath/wsj0-processed/si_tr_s/
 
-experiment_name: codecformer_VBcond/DAC_libriTTS_L1nq_VBcond_v1_stage2_v3w
+experiment_name: codecformer_VBcond/DAC_libriTTS_L1nq_VBcond_v1_stage2_v3
 output_folder: !ref results/<experiment_name>/<seed>
 train_log: !ref <output_folder>/train_log.txt
 save_folder: !ref <output_folder>/save
@@ -204,4 +204,4 @@ pretrained_separator: !new:speechbrain.utils.parameter_transfer.Pretrainer
   loadables:
       sepmodel: !ref <sepmodel> 
   paths:
-      sepmodel: /home/jiaqi006/code/speechbrain_v1_0_0/speechbrain/recipes/WSJ0Mix/separation/results/codecformer4/DAC_ss3-512_libriTTS_L1nq/1234/save/sepmodel_ep100.ckpt
+      sepmodel: /home/jiaqi006/code/speechbrain_v1_0_0/speechbrain/recipes/WSJ0Mix/separation/results/codecformer4/DAC_ss3-512_libriTTS_L1nq/1234/save/sepmodel_temp_pt.ckpt

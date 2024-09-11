@@ -25,7 +25,7 @@ data_folder: /scratch/jiaqi006/others/wsj0-2mix/2speakers
 # you can do this conversion with the script ../meta/preprocess_dynamic_mixing.py
 base_folder_dm: /yourpath/wsj0-processed/si_tr_s/
 
-experiment_name: codecformer_VBcond/DAC_libriTTS_L1nq_VBcond_v1_stage2_v3w
+experiment_name: codecformer_VBcond/DAC_libriTTS_L1nq_VBcond_v1_stage2_v4
 output_folder: !ref results/<experiment_name>/<seed>
 train_log: !ref <output_folder>/train_log.txt
 save_folder: !ref <output_folder>/save
@@ -144,7 +144,7 @@ block: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
 vbmodel: !new:voicebox_pytorch.VoiceBox
   dim: !ref <codec_channels>
   num_cond_tokens: 500
-  depth: 2
+  depth: 24
   dim_head: 64
   heads: 16
   condition_on_text: False

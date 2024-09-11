@@ -10,7 +10,7 @@
 # Basic parameters
 # Seed needs to be set at top of yaml, before objects with parameters are made
 #
-seed: 3
+seed: 1234
 __set_seed: !apply:torch.manual_seed [1234]
 
 # Data params
@@ -25,14 +25,14 @@ data_folder: /scratch/jiaqi006/others/wsj0-2mix/2speakers
 # you can do this conversion with the script ../meta/preprocess_dynamic_mixing.py
 base_folder_dm: /yourpath/wsj0-processed/si_tr_s/
 
-experiment_name: codecformer_VBcond/DAC_libriTTS_L1nq_VBcond_v1_stage2_v3w
+experiment_name: codecformer4/SoundstreamELU_ss3-512_OWSM_L1nq
 output_folder: !ref results/<experiment_name>/<seed>
 train_log: !ref <output_folder>/train_log.txt
 save_folder: !ref <output_folder>/save
 train_data: !ref <save_folder>/wsj_tr.csv
 valid_data: !ref <save_folder>/wsj_cv.csv
 test_data: !ref <save_folder>/wsj_tt.csv
-skip_prep: False
+skip_prep: false
 
 
 # Experiment params
@@ -41,20 +41,19 @@ test_only: false
 num_spks: 2 # set to 3 for wsj0-3mix
 noprogressbar: false
 save_audio: true # Save estimated sources on disk
-n_audio_to_save: 10
+n_audio_to_save: 20
 sample_rate: 8000
-codec_sample_rate: 16000
 quantize_before: false
-quantize_after: false
+quantize_after: True
 
 # Training parameters
 N_epochs: 100
-batch_size: 5 #3
+batch_size: 20 #3
 lr: 0.00015 #0.003
 clip_grad_norm: 5
 loss_upper_lim: 999999  # this is the upper limit for an acceptable loss
 # if True, the training sequences are cut to a specified length
-limit_training_signal_len: False
+limit_training_signal_len: false
 # this is the length of sequences if we choose to limit
 # the signal length of training sequences
 training_signal_len: 40000
@@ -122,12 +121,12 @@ test_dataloader_opts:
 
 # Encoder parameters
 codec_channels: 512
-block_channels: 512 #1024 #256
+block_channels: 256 #1024 #256
 
 # block: !new:speechbrain.lobes.models.passblock.PassBlock
 block: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
   num_layers: 16  #16
-  d_model: !ref <block_channels>
+  d_model: 256
   nhead: 8  #1/8
   d_ffn: 1024             #2048?
   dropout: 0.1  #0.0/0.1/0.5
@@ -141,29 +140,27 @@ block: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
 #     dropout: 0
 #     bidirectional: False
 
-vbmodel: !new:voicebox_pytorch.VoiceBox
-  dim: !ref <codec_channels>
-  num_cond_tokens: 500
-  depth: 2
-  dim_head: 64
-  heads: 16
-  condition_on_text: False
-
-vbCFM: !new:voicebox_pytorch.ConditionalFlowMatcherWrapper
-  voicebox: !ref <vbmodel>
-
-dacmodel: !new:speechbrain.lobes.models.codecformer3_espnet.DACWrapper
+dacmodel: !new:speechbrain.lobes.models.codecformer3_espnet_soundstream.DACWrapper
   input_sample_rate: 8000
-  DAC_model_path: /home/jiaqi006/.cache/huggingface/hub/models--espnet--libritts_dac_16k/snapshots/47d8ae9176d761b64956d3c63a397158a20accdc/exp/codec_train_dac_16k_raw_fs16000
+  DAC_model_path: /home/jiaqi006/.cache/huggingface/hub/models--espnet--owsmdata_soundstream_16k_200epoch/snapshots/ceb51486bab4c239307b1cec4f2349b20b4968c1/exp/codec_train_soundstream4_large_v1.1_raw_fs16000
   DAC_sample_rate: 16000
   Freeze: true
-  pth_file_name: 104epoch.pth
+  epoch: 200
   
-sepmodel: !new:speechbrain.lobes.models.codecformer4.simpleSeparator3
+sepmodel: !new:speechbrain.lobes.models.codecformer3_espnet_soundstream.simpleSeparator2
+        # dacmodel: !ref <dacmodel>
   num_spks: 2
   channels: !ref <codec_channels>
   block: !ref <block>
-  block_channels: !ref <block_channels>
+  block_channels: 256
+  activation: "ELU"
+  activation_params:
+    alpha: 1.0
+
+# sepmodel: !new:speechbrain.lobes.models.codecformer3.simpleUNetSeparator
+#     num_spks: !ref <num_spks> 
+#     channels: !ref <channels>
+#     block: !ref <dprnnblock>
 
 optimizer: !name:torch.optim.Adam
   lr: !ref <lr>
@@ -185,23 +182,12 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
   limit: !ref <N_epochs>
 
 modules:
-  # sepmodel: !ref <sepmodel>
-  vbCFM: !ref <vbCFM>
-  
+  sepmodel: !ref <sepmodel>
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
   checkpoints_dir: !ref <save_folder>
   recoverables:
-    # sepmodel: !ref <sepmodel>
-    vbCFM: !ref <vbCFM>
+    sepmodel: !ref <sepmodel>
     counter: !ref <epoch_counter>
     lr_scheduler: !ref <lr_scheduler>
-
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
   save_file: !ref <train_log>
-
-pretrained_separator: !new:speechbrain.utils.parameter_transfer.Pretrainer
-  collect_in: !ref <save_folder>
-  loadables:
-      sepmodel: !ref <sepmodel> 
-  paths:
-      sepmodel: /home/jiaqi006/code/speechbrain_v1_0_0/speechbrain/recipes/WSJ0Mix/separation/results/codecformer4/DAC_ss3-512_libriTTS_L1nq/1234/save/sepmodel_ep100.ckpt

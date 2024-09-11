@@ -48,7 +48,7 @@ quantize_before: false
 quantize_after: false
 
 # Training parameters
-N_epochs: 50
+N_epochs: 100
 batch_size: 20 #3
 lr: 0.00015 #0.003
 clip_grad_norm: 5
