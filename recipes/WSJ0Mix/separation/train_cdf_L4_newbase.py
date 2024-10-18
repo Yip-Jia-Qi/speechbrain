@@ -100,28 +100,26 @@ class Separation(sb.Brain):
         other['targ_w'] = targ_w
         targ_lengths = torch.tensor([item[1] for item in targs])
         
-        if stage != sb.Stage.TRAIN:
-            #quantization step
-            targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
-            targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]
-            other['targ_q'] = targ_q
-            targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
-            other['targ_q_codes'] = targ_q_codes
+        
+        #quantization step
+        targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
+        targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]
+        other['targ_q'] = targ_q
+        targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
+        other['targ_q_codes'] = targ_q_codes
         
             
-            #decoding step
-            targets_transmitted = torch.cat(
-                [
-                    self.hparams.dacmodel.get_decoded_signal(targ_q[i],targ_lengths[i]).unsqueeze(0)
-                    for i in range(self.hparams.num_spks)
-                ],
-                dim=0,
-            )
+        #decoding step
+        targets_transmitted = torch.cat(
+            [
+                self.hparams.dacmodel.get_decoded_signal(targ_q[i],targ_lengths[i]).unsqueeze(0)
+                for i in range(self.hparams.num_spks)
+            ],
+            dim=0,
+        )
 
-            #get targets back to original dimensions [batch, time, spks]
-            targets_transmitted = targets_transmitted.squeeze(2).permute(1,2,0)
-        else:
-            targets_transmitted = None
+        #get targets back to original dimensions [batch, time, spks]
+        targets_transmitted = targets_transmitted.squeeze(2).permute(1,2,0)
         
         ##############
         # Separation #
@@ -143,43 +141,42 @@ class Separation(sb.Brain):
         other['mix_s'] = mix_s
         #For L1 training, mix_s is the output used
 
-        #Pipeline for validation and testing is the same. Decoding to waveforms is done only when not training. 
-        if stage != sb.Stage.TRAIN:
-            #Apply quantization if necessary
-            if self.hparams.quantize_after:
-                mix_qs = [self.hparams.dacmodel.get_quantized_features(mix_s[i]) for i in range(self.hparams.num_spks)]
+        if self.hparams.quantize_after:
+            mix_qs = [self.hparams.dacmodel.get_quantized_features(mix_s[i]) for i in range(self.hparams.num_spks)]
 
-                mix_sq = torch.cat([item[0].unsqueeze(0) for item in mix_qs],dim=0) #[spks, B, N, L]
-                mix_sq_codes = torch.cat([item[1].unsqueeze(0) for item in mix_qs],dim=0)
-                other['mix_sq'] = mix_sq
-                other['mix_sq_codes'] = mix_sq_codes
-            else:
-                mix_sq = mix_s
-            
-            
-            est_source = torch.cat(
-                [
-                    self.hparams.dacmodel.get_decoded_signal(mix_sq[i],mix_length).unsqueeze(0)
-                    for i in range(self.hparams.num_spks)
-                ],
-                dim=0,
-            )
-
-            #output is currently [Speakers, Batch, channels, Time]
-            est_source = est_source.squeeze(2).permute(1,2,0)
-            #final est_source needs to be [Batch, Time, Speakers]
+            mix_sq = torch.cat([item[0].unsqueeze(0) for item in mix_qs],dim=0) #[spks, B, N, L]
+            mix_sq_codes = torch.cat([item[1].unsqueeze(0) for item in mix_qs],dim=0)
+            other['mix_sq'] = mix_sq
+            other['mix_sq_codes'] = mix_sq_codes
         else:
-            est_source = None
+            mix_sq = mix_s
+        
+        
+        est_source = torch.cat(
+            [
+                self.hparams.dacmodel.get_decoded_signal(mix_sq[i],mix_length).unsqueeze(0)
+                for i in range(self.hparams.num_spks)
+            ],
+            dim=0,
+        )
 
+        #output is currently [Speakers, Batch, channels, Time]
+        est_source = est_source.squeeze(2).permute(1,2,0)
+        #final est_source needs to be [Batch, Time, Speakers]
+        
         return est_source, targets, targets_transmitted, other
 
     def compute_objectives(self, predictions, targets, other, stage):
         """Computes the sinr loss""" 
         if stage == sb.Stage.TRAIN:
-        
-            emb_loss = self.hparams.L1_loss(other["mix_s"].permute(1,2,3,0),other["targ_w"].permute(1,2,3,0))
-            
-            loss = emb_loss
+
+            # emb_loss = self.hparams.L1_loss(mix_s.permute(1,2,3,0),targ_w.permute(1,2,3,0))
+            # resid_loss = self.hparams.L1_loss(mix_sq.permute(1,2,3,0),targ_q.permute(1,2,3,0))
+            wave_loss = self.hparams.loss(targets, predictions)
+
+            # repr_loss = emb_loss + (resid_loss * (1/emb_loss))
+            # loss = repr_loss + (wave_loss * (1/repr_loss))
+            loss = wave_loss
 
         elif stage == sb.Stage.TEST:
             loss = self.hparams.loss(targets, predictions)
@@ -465,7 +462,7 @@ class Separation(sb.Brain):
 
                     # from sb.nnet.losses import get_perceptual_with_si_snr_pit
                     # sisnr, pesq_score, stoi_score, dns_score = get_perceptual_with_si_snr_pit(targets, predictions, self.hparams.sample_rate, dnsmos)
-                    sisnr, pesq_score, stoi_score, ovrl_score, sig_score, bak_score, p808_score = get_perceptual_with_si_snr_pit(targets, predictions, self.hparams.sample_rate, dnsmos) #make sure nto to get the order of sampel rate and codec_sample rate wrong!
+                    sisnr, pesq_score, stoi_score, ovrl_score, sig_score, bak_score, p808_score = get_perceptual_with_si_snr_pit(targets, predictions, self.hparams.sample_rate, dnsmos)
 
                     # Compute SI-SNR improvement
                     mixture_signal = torch.stack(
